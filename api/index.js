@@ -61,8 +61,18 @@ initDB();
 
 // --- MIDDLEWARE AUTHENTIKASI ---
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; 
+  // Ambil token dari header Authorization (case-insensitive)
+  const authHeader = req.headers.authorization;
+  
+  // Cek apakah header ada dan formatnya "Bearer <token>"
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ 
+      success: false, 
+      message: 'Token tidak ditemukan atau format salah. Gunakan: Authorization: Bearer <token>' 
+    });
+  }
+
+  const token = authHeader.split(' ')[1];
 
   if (!token) {
     return res.status(401).json({ 
@@ -73,7 +83,11 @@ const authenticateToken = (req, res, next) => {
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
-      return res.status(403).json({ success: false, message: 'Token tidak valid.' });
+      // Token expired atau invalid selalu kembalikan 401
+      return res.status(401).json({ 
+        success: false, 
+        message: err.name === 'TokenExpiredError' ? 'Token telah kadaluarsa' : 'Token tidak valid' 
+      });
     }
     req.user = user;
     next();
@@ -141,11 +155,12 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// 3. Get Jadwal
+// 3. Get Jadwal - SELALU mengembalikan Array [] jika sukses
 app.get('/api/jadwal', authenticateToken, async (req, res) => {
   try {
     const result = await sql`SELECT * FROM jadwal WHERE user_id = ${req.user.id} ORDER BY waktu_mulai ASC`;
-    res.json({ success: true, data: result.rows });
+    // Pastikan data selalu berupa array, bahkan jika kosong
+    res.json({ success: true, data: result.rows || [] });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Gagal ambil jadwal.', error: error.message });
   }
