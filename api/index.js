@@ -155,12 +155,12 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// 3. Get Jadwal - SELALU mengembalikan Array [] jika sukses
+// 3. Get Jadwal - SELALU mengembalikan Array [] jika sukses (raw array, no wrapper)
 app.get('/api/jadwal', authenticateToken, async (req, res) => {
   try {
     const result = await sql`SELECT * FROM jadwal WHERE user_id = ${req.user.id} ORDER BY waktu_mulai ASC`;
-    // Pastikan data selalu berupa array, bahkan jika kosong
-    res.json({ success: true, data: result.rows || [] });
+    // Kembalikan array langsung, bukan objek wrapper
+    res.json(result.rows || []);
   } catch (error) {
     res.status(500).json({ success: false, message: 'Gagal ambil jadwal.', error: error.message });
   }
