@@ -1,0 +1,19 @@
+{
+  "name": "jadwalin-backend",
+  "version": "1.0.0",
+  "description": "Backend untuk aplikasi Android Jadwalin dengan Vercel Postgres",
+  "main": "api/server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'No build step required for serverless functions'"
+  },
+  "dependencies": {
+    "@vercel/postgres": "^0.8.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
