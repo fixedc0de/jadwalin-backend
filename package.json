@@ -5,8 +5,8 @@
   "main": "api/server.js",
   "type": "module",
   "scripts": {
-    "dev": "vercel dev",
-    "build": "echo 'No build step required for serverless functions'"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
   },
   "dependencies": {
     "@vercel/postgres": "^0.8.0",
