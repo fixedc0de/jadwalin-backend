@@ -1,9 +1,8 @@
 {
-  "version": 2,
   "rewrites": [
-    { "source": "/api/auth/register/?", "destination": "/api/auth/register.js" },
-    { "source": "/api/auth/login/?", "destination": "/api/auth/login.js" },
-    { "source": "/api/jadwal/?", "destination": "/api/jadwal/route.js" },
-    { "source": "/api/jadwal/:android_id/?", "destination": "/api/jadwal/route.js" }
+    { "source": "/api/auth/register", "destination": "/api/auth/register" },
+    { "source": "/api/auth/login", "destination": "/api/auth/login" },
+    { "source": "/api/jadwal", "destination": "/api/jadwal/route" },
+    { "source": "/api/jadwal/:android_id", "destination": "/api/jadwal/route" }
   ]
 }
