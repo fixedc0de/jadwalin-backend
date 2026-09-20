@@ -9,6 +9,9 @@ const app = express();
 // --- KONFIGURASI ---
 const JWT_SECRET = process.env.JWT_SECRET;
 
+// Store untuk blacklist token (dalam produksi, gunakan Redis/database)
+const tokenBlacklist = new Set();
+
 // Middleware Dasar
 app.use(cors());
 app.use(express.json());
@@ -19,18 +22,20 @@ let dbInitialized = false;
 async function initDB() {
   if (dbInitialized) return;
   try {
-    // Buat tabel users
+    // Buat tabel users dengan field tambahan untuk profile
     await sql`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) UNIQUE NOT NULL,
         password TEXT NOT NULL,
         name VARCHAR(255) NOT NULL,
+        full_name VARCHAR(255),
+        verified_status BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `;
 
-    // Buat tabel jadwal
+    // Buat tabel jadwal dengan field is_active dan last_sync_timestamp
     await sql`
       CREATE TABLE IF NOT EXISTS jadwal (
         id SERIAL PRIMARY KEY,
@@ -41,6 +46,7 @@ async function initDB() {
         waktu_mulai VARCHAR(50) NOT NULL,
         kategori VARCHAR(100),
         lokasi VARCHAR(255),
+        is_active BOOLEAN DEFAULT TRUE,
         is_recurring BOOLEAN DEFAULT FALSE,
         hari_dalam_minggu INTEGER DEFAULT 0,
         menit_sebelumnya INTEGER DEFAULT 0,
@@ -78,6 +84,14 @@ const authenticateToken = (req, res, next) => {
     return res.status(401).json({ 
       success: false, 
       message: 'Token tidak ditemukan.' 
+    });
+  }
+
+  // Cek apakah token ada di blacklist (logout)
+  if (tokenBlacklist.has(token)) {
+    return res.status(401).json({ 
+      success: false, 
+      message: 'Token telah diblacklist (logout).' 
     });
   }
 
@@ -156,20 +170,26 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // 3. Get Jadwal - SELALU mengembalikan Array [] jika sukses (raw array, no wrapper)
+// Menambahkan metadata last_sync_timestamp untuk UI
 app.get('/api/jadwal', authenticateToken, async (req, res) => {
   try {
     const result = await sql`SELECT * FROM jadwal WHERE user_id = ${req.user.id} ORDER BY waktu_mulai ASC`;
-    // Kembalikan array langsung, bukan objek wrapper
-    res.json(result.rows || []);
+    // Kembalikan array langsung dengan tambahan metadata last_sync_timestamp
+    const jadwalData = result.rows || [];
+    const lastSyncTimestamp = new Date().toISOString();
+    
+    // Tambahkan metadata ke response header atau sebagai properti khusus
+    res.set('X-Last-Sync-Timestamp', lastSyncTimestamp);
+    res.json(jadwalData);
   } catch (error) {
     res.status(500).json({ success: false, message: 'Gagal ambil jadwal.', error: error.message });
   }
 });
 
-// 4. Create Jadwal
+// 4. Create Jadwal - mendukung field lokasi dan is_active
 app.post('/api/jadwal', authenticateToken, async (req, res) => {
   try {
-    const { judul, deskripsi, waktu_mulai, kategori, lokasi, isRecurring, hariDalamMinggu, menitSebelumnya, android_id } = req.body;
+    const { judul, deskripsi, waktu_mulai, kategori, lokasi, isActive, isRecurring, hariDalamMinggu, menitSebelumnya, android_id } = req.body;
     
     if (!judul || !waktu_mulai || android_id === undefined) {
       return res.status(400).json({ success: false, message: 'Judul, waktu_mulai, android_id wajib.' });
@@ -181,8 +201,8 @@ app.post('/api/jadwal', authenticateToken, async (req, res) => {
     }
 
     const result = await sql`
-      INSERT INTO jadwal (user_id, android_id, judul, deskripsi, waktu_mulai, kategori, lokasi, is_recurring, hari_dalam_minggu, menit_sebelumnya)
-      VALUES (${req.user.id}, ${android_id}, ${judul}, ${deskripsi || null}, ${waktu_mulai}, ${kategori || null}, ${lokasi || null}, ${isRecurring || false}, ${hariDalamMinggu || 0}, ${menitSebelumnya || 0})
+      INSERT INTO jadwal (user_id, android_id, judul, deskripsi, waktu_mulai, kategori, lokasi, is_active, is_recurring, hari_dalam_minggu, menit_sebelumnya)
+      VALUES (${req.user.id}, ${android_id}, ${judul}, ${deskripsi || null}, ${waktu_mulai}, ${kategori || null}, ${lokasi || null}, ${isActive !== undefined ? isActive : true}, ${isRecurring || false}, ${hariDalamMinggu || 0}, ${menitSebelumnya || 0})
       RETURNING *
     `;
 
@@ -192,11 +212,11 @@ app.post('/api/jadwal', authenticateToken, async (req, res) => {
   }
 });
 
-// 5. Update Jadwal
+// 5. Update Jadwal - mendukung field lokasi dan is_active
 app.put('/api/jadwal/:android_id', authenticateToken, async (req, res) => {
   try {
     const android_id = parseInt(req.params.android_id);
-    const { judul, deskripsi, waktu_mulai, kategori, lokasi, isRecurring, hariDalamMinggu, menitSebelumnya } = req.body;
+    const { judul, deskripsi, waktu_mulai, kategori, lokasi, isActive, isRecurring, hariDalamMinggu, menitSebelumnya } = req.body;
 
     const check = await sql`SELECT * FROM jadwal WHERE user_id = ${req.user.id} AND android_id = ${android_id}`;
     if (check.rows.length === 0) return res.status(404).json({ success: false, message: 'Jadwal tidak ditemukan.' });
@@ -209,6 +229,7 @@ app.put('/api/jadwal/:android_id', authenticateToken, async (req, res) => {
         waktu_mulai = ${waktu_mulai || row.waktu_mulai},
         kategori = ${kategori !== undefined ? kategori : row.kategori},
         lokasi = ${lokasi !== undefined ? lokasi : row.lokasi},
+        is_active = ${isActive !== undefined ? isActive : row.is_active},
         is_recurring = ${isRecurring !== undefined ? isRecurring : row.is_recurring},
         hari_dalam_minggu = ${hariDalamMinggu !== undefined ? hariDalamMinggu : row.hari_dalam_minggu},
         menit_sebelumnya = ${menitSebelumnya !== undefined ? menitSebelumnya : row.menit_sebelumnya},
@@ -234,6 +255,54 @@ app.delete('/api/jadwal/:android_id', authenticateToken, async (req, res) => {
     res.json({ success: true, message: 'Jadwal dihapus', data: result.rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Gagal hapus jadwal.', error: error.message });
+  }
+});
+
+// 7. User Profile - endpoint baru untuk mengambil detail profil user
+app.get('/api/user/profile', authenticateToken, async (req, res) => {
+  try {
+    const result = await sql`SELECT id, email, name, full_name, verified_status, created_at FROM users WHERE id = ${req.user.id}`;
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User tidak ditemukan.' });
+    }
+
+    const user = result.rows[0];
+    res.json({ 
+      success: true, 
+      data: {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name || user.name,
+        verified_status: user.verified_status || false,
+        created_at: user.created_at
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Gagal ambil profil user.', error: error.message });
+  }
+});
+
+// 8. Logout - endpoint baru untuk blacklist token JWT
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader ? authHeader.split(' ')[1] : null;
+    
+    if (token) {
+      // Tambahkan token ke blacklist (dalam produksi, gunakan Redis dengan TTL)
+      tokenBlacklist.add(token);
+      
+      // Opsional: Set timeout untuk menghapus token dari blacklist setelah expire
+      // Dalam produksi, gunakan Redis EXPIRE
+      setTimeout(() => {
+        tokenBlacklist.delete(token);
+      }, 7 * 24 * 60 * 60 * 1000); // 7 hari (sesuai expiresIn token)
+    }
+
+    res.json({ success: true, message: 'Logout berhasil. Token telah diblacklist.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Gagal logout.', error: error.message });
   }
 });
 
