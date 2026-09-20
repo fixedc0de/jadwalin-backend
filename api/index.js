@@ -180,16 +180,16 @@ app.get('/api/jadwal', authenticateToken, async (req, res) => {
     
     // Tambahkan metadata ke response header atau sebagai properti khusus
     res.set('X-Last-Sync-Timestamp', lastSyncTimestamp);
-    res.json(jadwalData);
+    res.json({ success: true, data: jadwalData });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Gagal ambil jadwal.', error: error.message });
   }
 });
 
-// 4. Create Jadwal - mendukung field lokasi dan is_active
+// 4. Create Jadwal - mendukung field lokasi dan is_active (snake_case)
 app.post('/api/jadwal', authenticateToken, async (req, res) => {
   try {
-    const { judul, deskripsi, waktu_mulai, kategori, lokasi, isActive, isRecurring, hariDalamMinggu, menitSebelumnya, android_id } = req.body;
+    const { judul, deskripsi, waktu_mulai, kategori, lokasi, is_active, is_recurring, hari_dalam_minggu, menit_sebelumnya, android_id } = req.body;
     
     if (!judul || !waktu_mulai || android_id === undefined) {
       return res.status(400).json({ success: false, message: 'Judul, waktu_mulai, android_id wajib.' });
@@ -197,12 +197,17 @@ app.post('/api/jadwal', authenticateToken, async (req, res) => {
 
     const existing = await sql`SELECT * FROM jadwal WHERE user_id = ${req.user.id} AND android_id = ${android_id}`;
     if (existing.rows.length > 0) {
-      return res.status(409).json({ success: false, message: 'Jadwal dengan ID ini sudah ada.' });
+      // Kembalikan status 409 Conflict dengan data jadwal yang sudah ada
+      return res.status(409).json({ 
+        success: false, 
+        message: 'Jadwal dengan ID ini sudah ada.',
+        data: existing.rows[0]
+      });
     }
 
     const result = await sql`
       INSERT INTO jadwal (user_id, android_id, judul, deskripsi, waktu_mulai, kategori, lokasi, is_active, is_recurring, hari_dalam_minggu, menit_sebelumnya)
-      VALUES (${req.user.id}, ${android_id}, ${judul}, ${deskripsi || null}, ${waktu_mulai}, ${kategori || null}, ${lokasi || null}, ${isActive !== undefined ? isActive : true}, ${isRecurring || false}, ${hariDalamMinggu || 0}, ${menitSebelumnya || 0})
+      VALUES (${req.user.id}, ${android_id}, ${judul}, ${deskripsi || null}, ${waktu_mulai}, ${kategori || null}, ${lokasi || null}, ${is_active !== undefined ? is_active : true}, ${is_recurring || false}, ${hari_dalam_minggu || 0}, ${menit_sebelumnya || 0})
       RETURNING *
     `;
 
@@ -212,11 +217,11 @@ app.post('/api/jadwal', authenticateToken, async (req, res) => {
   }
 });
 
-// 5. Update Jadwal - mendukung field lokasi dan is_active
+// 5. Update Jadwal - mendukung field lokasi dan is_active (snake_case)
 app.put('/api/jadwal/:android_id', authenticateToken, async (req, res) => {
   try {
     const android_id = parseInt(req.params.android_id);
-    const { judul, deskripsi, waktu_mulai, kategori, lokasi, isActive, isRecurring, hariDalamMinggu, menitSebelumnya } = req.body;
+    const { judul, deskripsi, waktu_mulai, kategori, lokasi, is_active, is_recurring, hari_dalam_minggu, menit_sebelumnya } = req.body;
 
     const check = await sql`SELECT * FROM jadwal WHERE user_id = ${req.user.id} AND android_id = ${android_id}`;
     if (check.rows.length === 0) return res.status(404).json({ success: false, message: 'Jadwal tidak ditemukan.' });
@@ -229,10 +234,10 @@ app.put('/api/jadwal/:android_id', authenticateToken, async (req, res) => {
         waktu_mulai = ${waktu_mulai || row.waktu_mulai},
         kategori = ${kategori !== undefined ? kategori : row.kategori},
         lokasi = ${lokasi !== undefined ? lokasi : row.lokasi},
-        is_active = ${isActive !== undefined ? isActive : row.is_active},
-        is_recurring = ${isRecurring !== undefined ? isRecurring : row.is_recurring},
-        hari_dalam_minggu = ${hariDalamMinggu !== undefined ? hariDalamMinggu : row.hari_dalam_minggu},
-        menit_sebelumnya = ${menitSebelumnya !== undefined ? menitSebelumnya : row.menit_sebelumnya},
+        is_active = ${is_active !== undefined ? is_active : row.is_active},
+        is_recurring = ${is_recurring !== undefined ? is_recurring : row.is_recurring},
+        hari_dalam_minggu = ${hari_dalam_minggu !== undefined ? hari_dalam_minggu : row.hari_dalam_minggu},
+        menit_sebelumnya = ${menit_sebelumnya !== undefined ? menit_sebelumnya : row.menit_sebelumnya},
         updated_at = NOW()
       WHERE user_id = ${req.user.id} AND android_id = ${android_id}
       RETURNING *
@@ -258,7 +263,7 @@ app.delete('/api/jadwal/:android_id', authenticateToken, async (req, res) => {
   }
 });
 
-// 7. User Profile - endpoint baru untuk mengambil detail profil user
+// 7. User Profile - endpoint baru untuk mengambil detail profil user dengan last_sync
 app.get('/api/user/profile', authenticateToken, async (req, res) => {
   try {
     const result = await sql`SELECT id, email, name, full_name, verified_status, created_at FROM users WHERE id = ${req.user.id}`;
@@ -266,6 +271,10 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'User tidak ditemukan.' });
     }
+
+    // Ambil updated_at terbaru dari tabel jadwal untuk last_sync
+    const syncResult = await sql`SELECT MAX(updated_at) as last_sync FROM jadwal WHERE user_id = ${req.user.id}`;
+    const lastSync = syncResult.rows[0]?.last_sync || null;
 
     const user = result.rows[0];
     res.json({ 
@@ -275,7 +284,8 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
         email: user.email,
         full_name: user.full_name || user.name,
         verified_status: user.verified_status || false,
-        created_at: user.created_at
+        created_at: user.created_at,
+        last_sync: lastSync
       }
     });
   } catch (error) {
